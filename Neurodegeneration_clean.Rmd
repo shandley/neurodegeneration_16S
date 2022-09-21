@@ -1,0 +1,1533 @@
+---
+title: "Mice_Neurodegeneration_Tau_mice"
+author: "Yuhao Li"
+date: "1/13/2022"
+output: html_document
+---
+
+**Project Description:**
+Analysis of the bacterial microbiome in Dong-Oh's mouse neurodegeneration study. 9 cohorts are analyzed. Analysis is of 16S rRNA sequences obtained from mice stool samples.
+
+**Collaborators:**
+Seo, Dong-oh: seo.d@wustl.edu
+Scott Handley: shandley@wustl.edu
+Yuhao Li: yuhaoli@wustl.edu
+
+**Other relevant documents:**
+The following Phyloseq objects are available. Each is distinguished based on the 16S reference database used for taxonomic classification. RDP were processed through the species assignment workflow available through dada2 (https://benjjneb.github.io/dada2/assign.html:
+
+  * ps0_gg.RDS (GreenGenes)
+  * ps0_rdp.RDS (RDP)
+  
+
+  * mapping file: mapping_file_poolA.txt mapping_file_poolB.txt
+
+**Technical References:**
+  * http://f1000research.com/articles/5-1492/v1
+
+  * http://benjjneb.github.io/dada2/tutorial.htm
+  
+  
+```{r initiate-environment}
+# Global knitr option
+knitr::opts_chunk$set(fig.width=8,
+                      fig.height=6,
+                      fig.path="./figures/",
+                      dev='png',
+                      warning=FALSE,
+                      message=FALSE)
+
+# Load libraries
+library("phyloseq"); packageVersion("phyloseq")
+library("tidyverse"); packageVersion("tidyverse")
+library("ggsci"); packageVersion("ggsci")
+library("ggplot2"); packageVersion("ggplot2")
+library("ggpubr"); packageVersion("ggpubr")
+library("rstatix"); packageVersion("rstatix")
+library("cowplot"); packageVersion("cowplot")
+# Load libraries
+library("tidyverse"); packageVersion("tidyverse")
+library("phyloseq"); packageVersion("phyloseq")
+library("reshape2"); packageVersion("reshape2")
+library("plyr"); packageVersion("plyr")
+library("RColorBrewer"); packageVersion("RColorBrewer")
+library("vegan"); packageVersion("vegan")
+library("knitr"); packageVersion("knitr")
+library("plotly"); packageVersion("plotly")
+library("ggpubr"); packageVersion("ggpubr")
+library("data.table"); packageVersion("data.table")
+library("microbiome"); packageVersion("microbiome")
+library("DESeq2"); packageVersion("DESeq2")
+library("ggrepel"); packageVersion("ggrepel")
+library("janitor"); packageVersion("janitor")
+library("DAtest"); packageVersion("DAtest")
+library("rstatix"); packageVersion("rstatix")
+library("broom"); packageVersion("broom")
+library("ggsci"); packageVersion("ggsci")
+library("ggplot2"); packageVersion("ggplot2")
+library("gridExtra"); packageVersion("gridExtra")
+library("dplyr"); packageVersion("dplyr")
+```
+
+##Read in data
+```{r initiate-data, fig.width=6}
+# Load Phyloseq Object generated in *_preprocessing.Rmd documents
+ps0 <- readRDS("./ps0_rdp.RDS")
+ps0
+##phyloseq-class experiment-level object
+##otu_table()   OTU Table:         [ 1063 taxa and 1141 samples ]
+##tax_table()   Taxonomy Table:    [ 1063 taxa by 7 taxonomic ranks ]
+##phy_tree()    Phylogenetic Tree: [ 1063 tips and 1061 internal nodes ]
+
+# Load mapping file
+map1 <- import_qiime_sample_data("./mapping/mapping_file_poolA.txt")
+map2 <- import_qiime_sample_data("./mapping/mapping_file_poolB.txt")
+
+# Merge updated mapping files
+ps0 <- merge_phyloseq(ps0, map1, map2)
+ps0
+#Remove redundent samples
+ps0 <- subset_samples(ps0, remove != "1")
+ps0
+# View sample variables & generate basic stats
+sample_variables(ps0)
+sd(sample_sums(ps0)) #5344.088
+get_taxa_unique(ps0, "Phylum")
+#[1] "Firmicutes"                  "Bacteroidetes"               "Proteobacteria"             
+#[4] "Actinobacteria"              NA                            "Deferribacteres"            
+#[7] "Tenericutes"                 "Spirochaetes"                "Candidatus_Saccharibacteria"
+ntaxa(ps0) #1063
+sample_data(ps0) #[1137 samples by 13 sample variables]
+
+# Create a new data frame of the sorted row sums, a column of sorted values from 1 to the total number of individuals/counts for each RSV and a categorical variable stating these are all RSVs.
+readsumsdf = data.frame(nreads = sort(taxa_sums(ps0), TRUE), 
+                        sorted = 1:ntaxa(ps0),
+                        type = "ASVs")
+# Add a column of sample sums (total number of individuals per sample)
+readsumsdf = rbind(readsumsdf,
+                   data.frame(nreads = sort(sample_sums(ps0), TRUE),
+                              sorted = 1:nsamples(ps0),
+                              type = "Samples"))
+
+# Make a data frame with a column for the read counts of each sample for histogram production
+sample_sum_df <- data.frame(sum = sample_sums(ps0))
+
+# Make plots
+# Generates a bar plot with # of reads (y-axis) for each taxa. Sorted from most to least abundant
+# Generates a second bar plot with # of reads (y-axis) per sample. Sorted from most to least
+p.reads = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity") +
+  ggtitle("ASV Assessment") +
+  scale_y_log10() +
+  facet_wrap(~type, scales = "free") +
+  ylab("# of Reads")
+
+# Histogram of the number of Samples (y-axis) at various read depths
+p.reads.hist <- ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "firebrick3", binwidth = 150) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  ylab("# of Samples")
+
+# Final plot, side-by-side
+ggarrange(p.reads, p.reads.hist, ncol = 2)
+
+```
+
+##Sample assessment
+```{r sample-removal-identification, fig.width=6}
+#r sample-outlier-removal
+# Remove samples with fewer than 100 sequences
+nsamples(ps0) # 1137
+min(sample_sums(ps0)) # 0
+ps0 <- prune_samples(sample_sums(ps0) >= 100, ps0)
+nsamples(ps0) #1136 (TE4F-581_TE4F_ABX_16wk_Female samples are removed sequnces = 0)
+min(sample_sums(ps0)) # 7244
+
+# Format a data table to combine sample summary data with sample variable data
+ss <- sample_sums(ps0)
+sd <- as.data.frame(sample_data(ps0)) # useful to coerce the phyloseq object into an R data frame
+ss.df <- merge(sd, data.frame("ASV" = ss), by ="row.names") # merge ss with sd by row names. Rename ss to ASVs in the new data frame
+
+# Plot the data by the treatment variable
+y = 100 # Set a threshold for the minimum number of acceptable reads. Can start as a guess
+x = "Strain" # Set the x-axis variable you want to examine
+label = "Description" # This is the label you want to overlay on the points that are below threshold y. Should be something sample specific
+
+# Plot
+p.ss.boxplot<- ggplot(ss.df, aes_string(x, y = "ASV", colour = "Sex")) + # x is what you assigned it above
+  geom_boxplot(outlier.colour="NA", aes(group = Strain)) +
+  scale_y_log10() +
+  geom_hline(yintercept = y, lty = 2) + # Draws a dashed line across the threshold you set above as y
+  geom_jitter(alpha = 0.6, width = 0.15, size = 3) +
+  labs(y = "ASV (log10)") +
+  facet_grid(~Age) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(legend.position = "bottom") +
+  theme(axis.title.x = element_blank())
+p.ss.boxplot
+
+```
+
+## Removing sequences
+```{r prevalence-assessment}
+# Begin by removing sequences that were classified as either mitochondria or chlorplast
+ps0 # Check the number of taxa prior to removal [ 1063 taxa and 1136 samples ]
+get_taxa_unique(ps0, "Phylum")
+get_taxa_unique(ps0, "Class")
+get_taxa_unique(ps0, "Family")
+
+ps1 <- ps0 %>%
+  subset_taxa(
+    Family  != "mitochondria" &
+    Class   != "Chloroplast" &
+    Phylum != "Cyanobacteria/Chloroplast"
+  )
+
+ps1 # Confirm that the taxa were removed [ 788 taxa and 1136 samples ]
+get_taxa_unique(ps1, "Phylum")
+get_taxa_unique(ps1, "Class")
+get_taxa_unique(ps1, "Family")
+
+## subset samples according to experiment
+# Antibiotics experiment samples
+ps1_ABX <-subset_samples(ps1, EXP == "ABX Exp")
+ps1_ABX
+# Germ free experiment samples
+ps1_GF <-subset_samples(ps1, EXP != "ABX Exp")
+ps1_GF 
+
+##Summarize phyloseq object
+microbiome::summarize_phyloseq(ps1)
+microbiome::summarize_phyloseq(ps1_ABX)
+microbiome::summarize_phyloseq(ps1_GF)
+```
+
+#####MicrobiotaProcess
+The relative abundance of each sample in Fhylum/Genus level
+```{r}
+ps1_TE3F <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age != "24wk")
+#PS1_TE3F@sam_data$Treatment <- factor(ps1_TE3F@sam_data$Treatment,levels=c())
+mpse_ps1_TE3F <- ps1_TE3F %>% as.MPSE
+
+mpse_ps1_TE3F <- mpse_ps1_TE3F %>% mp_filter_taxa(.abundance = Abundance, min.abun = 1, min.prop = 0.05)
+
+mpse_ps1_TE3F$Treatment = factor(mpse_ps1_TE3F$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(mpse_ps1_TE3F$Treatment)
+mpse_ps1_TE3F$Sex = factor(mpse_ps1_TE3F$Sex,levels = c("Male", "Female")) #reorder Treatment Sex label order
+levels(mpse_ps1_TE3F$Sex)
+
+p.cc.Fhylum_TE3F <- mpse_ps1_TE3F %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Phylum, 
+                    topn = 10,
+                    relative = TRUE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Fhylum_TE3F
+
+p.cc.Fhylum_TE3F.2 <- mpse_ps1_TE3F %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Phylum, 
+                    topn = 10,
+                    relative = FALSE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Fhylum_TE3F.2
+
+p.cc.Genus_TE3F <- mpse_ps1_TE3F %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Genus, 
+                    topn = 10,
+                    relative = TRUE,
+                    plot.group=T)+
+theme(legend.key.width = unit(0.3, "cm"),
+legend.key.height = unit(0.3, "cm"),
+legend.text = element_text(size=6)
+)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Genus_TE3F
+
+p.cc.Genus_TE3F.2 <- mpse_ps1_TE3F %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Genus, 
+                    topn = 10,
+                    relative = FALSE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Genus_TE3F.2
+```
+
+Alpha diversity analysis
+Export alpla diversity index
+```{r}
+ps1_ABX 
+mpse_ps1_ABX  <- ps1_ABX %>% as.MPSE %>% mp_filter_taxa(.abundance = Abundance, min.abun = 1, min.prop = 0.05)
+
+mpse_ps1_ABX %<>% mp_cal_alpha(.abundance = Abundance,force = TRUE)
+aindex_TB <- mpse_ps1_ABX %>% select(Sample, Sex, Strain, Treatment, Age, Observe, Chao1, Shannon, Simpson, Pielou) 
+
+write.csv(aindex_TB, "./aindex_TB.csv") #Need to remove the dyplicates
+
+```
+
+Beta diversity analysis
+```{r}
+Straincolor<- c(Water = "#00A087B2", ABX = "#F39B7FB2")
+#TE3F_40wk_Male
+ps1_TE3F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age == "40wk")%>% subset_samples(Sex == "Male")
+mpse_ps1_TE3F_40wk_Male <- ps1_TE3F_40wk_Male %>% as.MPSE
+
+mpse_ps1_TE3F_40wk_Male$Treatment = factor(mpse_ps1_TE3F_40wk_Male$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(mpse_ps1_TE3F_40wk_Male$Treatment)
+
+# hellinger transform
+mpse_ps1_TE3F_40wk_Male %<>% mp_decostand(
+                                .abundance = Abundance,
+                                method = "hellinger"
+                                )
+
+#"wunifrac"
+mpse_ps1_TE3F_40wk_Male %<>% mp_cal_dist(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+# PCoA analysis
+mpse_ps1_TE3F_40wk_Male %<>% mp_cal_pcoa(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+
+pcoaplot1 <- mpse_ps1_TE3F_40wk_Male %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .group = Treatment,
+                                        .starshape = Treatment,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1
+
+pcoaplot1.1 <- mpse_ps1_TE3F_40wk_Male  %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .dim = c(1, 3),
+                                        .group = Treatment,
+                                        .starshape = Treatment,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1.1
+```
+
+```{r}
+#TE4F_40wk_Male
+ps1_TE4F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE4F") %>% subset_samples(Age == "40wk")%>% subset_samples(Sex == "Male")
+mpse_ps1_TE4F_40wk_Male <- ps1_TE4F_40wk_Male %>% as.MPSE
+
+mpse_ps1_TE4F_40wk_Male$Treatment = factor(mpse_ps1_TE4F_40wk_Male$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(mpse_ps1_TE4F_40wk_Male$Treatment)
+
+# hellinger transform
+mpse_ps1_TE4F_40wk_Male %<>% mp_decostand(
+                                .abundance = Abundance,
+                                method = "hellinger"
+                                )
+
+#"wunifrac"
+mpse_ps1_TE4F_40wk_Male %<>% mp_cal_dist(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+# PCoA analysis
+mpse_ps1_TE4F_40wk_Male %<>% mp_cal_pcoa(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+
+pcoaplot1 <- mpse_ps1_TE4F_40wk_Male %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .group = Treatment,
+                                        .starshape = Treatment,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1
+
+pcoaplot1.1 <- mpse_ps1_TE4F_40wk_Male  %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .dim = c(1, 3),
+                                        .group = Treatment,
+                                        #.starshape = Strain,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1.1
+```
+
+```{r}
+#TEKO_40wk_Male
+ps1_TEKO_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TEKO") %>% subset_samples(Age == "40wk")%>% subset_samples(Sex == "Male")
+mpse_ps1_TEKO_40wk_Male <- ps1_TEKO_40wk_Male %>% as.MPSE
+
+mpse_ps1_TEKO_40wk_Male$Treatment = factor(mpse_ps1_TEKO_40wk_Male$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(mpse_ps1_TEKO_40wk_Male$Treatment)
+
+# hellinger transform
+mpse_ps1_TEKO_40wk_Male %<>% mp_decostand(
+                                .abundance = Abundance,
+                                method = "hellinger"
+                                )
+
+#"wunifrac"
+mpse_ps1_TEKO_40wk_Male %<>% mp_cal_dist(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+# PCoA analysis
+mpse_ps1_TEKO_40wk_Male %<>% mp_cal_pcoa(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+
+pcoaplot1 <- mpse_ps1_TEKO_40wk_Male %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .group = Treatment,
+                                        #.starshape = Strain,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1
+
+pcoaplot1.1 <- mpse_ps1_TEKO_40wk_Male  %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .dim = c(1, 3),
+                                        .group = Treatment,
+                                        #.starshape = Strain,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1.1
+```
+
+Permutational Multivariate Analysis
+```{r}
+############################
+mpse_ps1_TE3F_TE4F_40wk_Male 
+mpse_ps1_TE3F_40wk_Male1 <- mpse_ps1_TE3F_TE4F_40wk_Male %>% filter(Strain == "TE3F")
+mpse_ps1_TE3F_40wk_Male1
+
+mpse_ps1_TE4F_40wk_Male2 <- mpse_ps1_TE3F_TE4F_40wk_Male  %>% filter(Strain == "TE4F")
+mpse_ps1_TE4F_40wk_Male2
+
+
+#TE3F_40wk_Male  ABX vs Water
+mpse_ps1_TE3F_40wk_Male1 %<>% mp_adonis( .abundance = hellinger,
+                            distmethod = "wunifrac",
+                            .formula = ~Treatment,
+                            permutation = 9999,
+                            action = "add")
+mpse_ps1_TE3F_40wk_Male1 %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+wunifrac_TE3F_40wk_Male <- mpse_ps1_TE3F_40wk_Male1 %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+write.csv(wunifrac_TE3F_40wk_Male, "./pdt_wunifrac_TE3F_40wk_Male.csv")
+#TE4F_40wk_Male ABX vs Water
+mpse_ps1_TE4F_40wk_Male2 %<>% mp_adonis( .abundance = hellinger,
+                            distmethod = "wunifrac",
+                            .formula = ~Treatment,
+                            permutation = 9999,
+                            action = "add")
+mpse_ps1_TE4F_40wk_Male2 %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+wunifrac_TE4F_40wk_Male <- mpse_ps1_TE4F_40wk_Male2 %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+write.csv(wunifrac_TE4F_40wk_Male, "./pdt_wunifrac_TE4F_40wk_Male.csv")
+
+#TEKO_40wk_Male ABX vs Water
+mpse_ps1_TEKO_40wk_Male %<>% mp_adonis( .abundance = hellinger,
+                            distmethod = "wunifrac",
+                            .formula = ~Treatment,
+                            permutation = 9999,
+                            action = "add")
+mpse_ps1_TEKO_40wk_Male %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+wunifrac_TEKO_40wk_Male <- mpse_ps1_TEKO_40wk_Male %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+write.csv(wunifrac_TEKO_40wk_Male, "./pdt_wunifrac_TEKO_40wk_Male.csv")
+
+```
+
+Biomarker discovery
+DA_volcano
+```{r}
+# DAtest
+library("DAtest"); packageVersion("DAtest")
+library("RColorBrewer"); packageVersion("RColorBrewer")
+library("data.table")
+library("DESeq2"); packageVersion("DESeq2") 
+library("metagMisc"); packageVersion("metagMisc")
+library("phylosmith"); packageVersion("phylosmith")
+# subset samples by Strain,Age,Gender 
+
+ps2_TE3F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male")
+
+ps2_TE4F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE4F") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male")
+
+ps2_TEKO_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TEKO") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male")
+# subset samples by Strain, Age, Water
+
+ps2_TE3F_40wk_Mock <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age == "40wk") %>% subset_samples(Treatment == "Water")
+
+ps2_TE4F_40wk_Mock <- ps1_ABX %>% subset_samples(Strain == "TE4F") %>% subset_samples(Age == "40wk") %>% subset_samples(Treatment == "Water")
+
+ps2_TEKO_40wk_Mock <- ps1_ABX %>% subset_samples(Strain == "TEKO") %>% subset_samples(Age == "40wk") %>% subset_samples(Treatment == "Water")
+```
+
+```{r}
+#TE3F_Male ABX VS Mock 40wk
+ps2_TE3F_40wk_Male_DA.ds2 <- DA.ds2(ps2_TE3F_40wk_Male, predictor = "Treatment")
+ps2_TE3F_40wk_Male_DA.ds2_padj <- subset(ps2_TE3F_40wk_Male_DA.ds2, ps2_TE3F_40wk_Male_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TE3F_40wk_Male_DA.ds2_padj, "./TE3F_40wk_Male_ABX_vs_Mock_DA.ds2_padj.csv")
+
+#TE4F_Male ABX VS Mock 40wk
+ps2_TE4F_40wk_Male_DA.ds2 <- DA.ds2(ps2_TE4F_40wk_Male, predictor = "Treatment")
+ps2_TE4F_40wk_Male_DA.ds2_padj <- subset(ps2_TE4F_40wk_Male_DA.ds2, ps2_TE4F_40wk_Male_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TE4F_40wk_Male_DA.ds2_padj, "./TE4F_40wk_Male_ABX_vs_Mock_DA.ds2_padj.csv")
+
+#TEKO_Male ABX VS Mock 40wk
+ps2_TEKO_40wk_Male_DA.ds2 <- DA.ds2(ps2_TEKO_40wk_Male, predictor = "Treatment")
+ps2_TEKO_40wk_Male_DA.ds2_padj <- subset(ps2_TEKO_40wk_Male_DA.ds2, ps2_TEKO_40wk_Male_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TEKO_40wk_Male_DA.ds2_padj, "./TEKO_40wk_Male_ABX_vs_Mock_DA.ds2_padj.csv")
+```
+
+```{r}
+# assign colors to groups
+am_color <- c(Mock = "#00A087B2", ABX = "#F39B7FB2")
+#TE3F_Male ABX VS Mock 40wk
+ps2_TE3F_40wk_Male_DA.ds2_padj <- subset(ps2_TE3F_40wk_Male_DA.ds2_padj, ps2_TE3F_40wk_Male_DA.ds2_padj$log2FoldChange < -1 | ps2_TE3F_40wk_Male_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_TE3F_40wk_Male_DA.ds2_padj)
+ps2_TE3F_40wk_Male_DA.ds2_padj_group <- ps2_TE3F_40wk_Male_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "Mock", "ABX"))
+ps2_TE3F_40wk_Male_DA.ds2_padj_group <- ps2_TE3F_40wk_Male_DA.ds2_padj_group %>% mutate(ps2_TE3F_40wk_Male_DA.ds2_padj_group, Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_TE3F_40wk_ABX_VS_Mock_DA_volcano <- ggplot(data= ps2_TE3F_40wk_Male_DA.ds2_padj_group, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("TE3F_40wk_Male") +
+  scale_color_manual(values = am_color)+
+  facet_wrap(~Phylum, ncol = 4)
+
+#TE4F_Male ABX VS Mock 40wk
+ps2_TE4F_40wk_Male_DA.ds2_padj <- subset(ps2_TE4F_40wk_Male_DA.ds2_padj, ps2_TE4F_40wk_Male_DA.ds2_padj$log2FoldChange < -1 | ps2_TE4F_40wk_Male_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_TE4F_40wk_Male_DA.ds2_padj)
+ps2_TE4F_40wk_Male_DA.ds2_padj_group <- ps2_TE4F_40wk_Male_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "Mock", "ABX"))
+ps2_TE4F_40wk_Male_DA.ds2_padj_group <- ps2_TE4F_40wk_Male_DA.ds2_padj_group %>% mutate(ps2_TE4F_40wk_Male_DA.ds2_padj_group, Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_TE4F_40wk_ABX_VS_Mock_DA_volcano <- ggplot(data= ps2_TE4F_40wk_Male_DA.ds2_padj_group, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("TE4F_40wk_Male") +
+  scale_color_manual(values = am_color)+
+  facet_wrap(~Phylum, nrow = 1)
+
+#TEKO_Male ABX VS Mock 40wk
+ps2_TEKO_40wk_Male_DA.ds2_padj <- subset(ps2_TEKO_40wk_Male_DA.ds2_padj, ps2_TEKO_40wk_Male_DA.ds2_padj$log2FoldChange < -1 | ps2_TEKO_40wk_Male_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_TEKO_40wk_Male_DA.ds2_padj)
+ps2_TEKO_40wk_Male_DA.ds2_padj_group <- ps2_TEKO_40wk_Male_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "Mock", "ABX"))
+ps2_TEKO_40wk_Male_DA.ds2_padj_group <- ps2_TEKO_40wk_Male_DA.ds2_padj_group %>% mutate(ps2_TEKO_40wk_Male_DA.ds2_padj_group, Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_TEKO_40wk_ABX_VS_Mock_DA_volcano <- ggplot(data= ps2_TEKO_40wk_Male_DA.ds2_padj_group, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("TEKO_40wk_Male") +
+  scale_color_manual(values = am_color)+
+  facet_wrap(~Phylum, nrow = 1)
+
+########
+ps2_TE3F_40wk_ABX_VS_Mock_DA_volcano
+ps2_TE4F_40wk_ABX_VS_Mock_DA_volcano
+ps2_TEKO_40wk_ABX_VS_Mock_DA_volcano
+```
+
+```{r}
+ps2_Male_40wk_Mock <- ps1_ABX %>% subset_samples(Strain == "TE3F" | Strain == "TE4F") %>% subset_samples(Age == "40wk") %>% subset_samples(Treatment == "Water") %>% subset_samples(Sex == "Male")
+
+ps2_Male_40wk_ABX <- ps1_ABX %>% subset_samples(Strain == "TE3F" | Strain == "TE4F") %>% subset_samples(Age == "40wk") %>% subset_samples(Treatment == "ABX") %>% subset_samples(Sex == "Male")
+
+#Male TE3F VS TE4F 40wk
+ps2_Male_40wk_Mock_DA.ds2 <- DA.ds2(ps2_Male_40wk_Mock, predictor = "Strain")
+ps2_Male_40wk_Mock_DA.ds2_padj <- subset(ps2_Male_40wk_Mock_DA.ds2, ps2_Male_40wk_Mock_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_Male_40wk_Mock_DA.ds2_padj, "./TE3F_vs_TE4F_Male_40wk_Mock_DA.ds2_padj.csv")
+
+#ABX Male TE3F VS TE4F 40wk
+ps2_Male_40wk_ABX_DA.ds2 <- DA.ds2(ps2_Male_40wk_ABX, predictor = "Strain")
+ps2_Male_40wk_ABX_DA.ds2_padj <- subset(ps2_Male_40wk_ABX_DA.ds2, ps2_Male_40wk_ABX_DA.ds2$pval.adj < 0.05)
+```
+
+```{r}
+#Male TE3F VS TE4F 40wk
+ps2_Male_40wk_Mock_DA.ds2_padj <- subset(ps2_Male_40wk_Mock_DA.ds2_padj, ps2_Male_40wk_Mock_DA.ds2_padj$log2FoldChange < -1 | ps2_Male_40wk_Mock_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_Male_40wk_Mock_DA.ds2_padj)
+ps2_Male_40wk_Mock_DA.ds2_padj_group <- ps2_Male_40wk_Mock_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "TE4F", "TE3F"))
+ps2_Male_40wk_Mock_DA.ds2_padj_group <- ps2_Male_40wk_Mock_DA.ds2_padj_group  %>% mutate(ps2_Male_40wk_Mock_DA.ds2_padj_group , Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_Male_40wk_Mock_DA_volcano <- ggplot(data= ps2_Male_40wk_Mock_DA.ds2_padj_group, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("TE3F vs TE4F_40wk_Male_Water") +
+  scale_color_manual(values = Strain_color)+
+  facet_wrap(~Phylum, ncol = 4)
+
+
+#Male TE3F VS TE4F 40wk ABX
+ps2_Male_40wk_ABX_DA.ds2_padj <- subset(ps2_Male_40wk_ABX_DA.ds2_padj, ps2_Male_40wk_ABX_DA.ds2_padj$log2FoldChange < -1 | ps2_Male_40wk_ABX_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_Male_40wk_ABX_DA.ds2_padj)
+ps2_Male_40wk_ABX_DA.ds2_padj_group <- ps2_Male_40wk_ABX_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "TE4F", "TE3F"))
+ps2_Male_40wk_ABX_DA.ds2_padj_group <- ps2_Male_40wk_ABX_DA.ds2_padj_group  %>% mutate(ps2_Male_40wk_ABX_DA.ds2_padj_group , Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_Male_40wk_ABX_DA_volcano <- ggplot(data= ps2_Male_40wk_ABX_DA.ds2_padj_group, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("TE3F vs TE4F_40wk_Male_ABX") +
+  scale_color_manual(values = Strain_color)+
+  facet_wrap(~Phylum, ncol = 4)
+```
+
+
+```{r}
+#TE3F_Water Male VS Female 40wk
+ps2_TE3F_40wk_Mock_DA.ds2 <- DA.ds2(ps2_TE3F_40wk_Mock, predictor = "Sex")
+ps2_TE3F_40wk_Mock_DA.ds2_padj <- subset(ps2_TE3F_40wk_Mock_DA.ds2, ps2_TE3F_40wk_Mock_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TE3F_40wk_Mock_DA.ds2_padj, "./TE3F_40wk_Mock_Male_vs_Female_DA.ds2_padj.csv")
+
+#TE4F_Water Male VS Female 40wk
+ps2_TE4F_40wk_Mock_DA.ds2 <- DA.ds2(ps2_TE4F_40wk_Mock, predictor = "Sex")
+ps2_TE4F_40wk_Mock_DA.ds2_padj <- subset(ps2_TE4F_40wk_Mock_DA.ds2, ps2_TE4F_40wk_Mock_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TE4F_40wk_Mock_DA.ds2_padj, "./TE4F_40wk_Mock_Male_vs_Female_DA.ds2_padj.csv")
+
+#TEKO_Water Male VS Female 40wk
+ps2_TEKO_40wk_Mock_DA.ds2 <- DA.ds2(ps2_TEKO_40wk_Mock, predictor = "Sex")
+ps2_TEKO_40wk_Mock_DA.ds2_padj <- subset(ps2_TEKO_40wk_Mock_DA.ds2, ps2_TEKO_40wk_Mock_DA.ds2$pval.adj < 0.05)
+write.csv(ps2_TEKO_40wk_Mock_DA.ds2_padj, "./TEKO_40wk_Mock_Male_vs_Female_DA.ds2_padj.csv")
+```
+
+```{r}
+ps2_TE3F_40wk_Mock_DA.ds2_padj
+Sex_color <- c("Male" = "#4A6FE3", "Female" = "#D33F6A")
+#Male TE3F VS TE4F 40wk
+ps2_TE3F_40wk_Mock_DA.ds2_padj <- subset(ps2_TE3F_40wk_Mock_DA.ds2_padj, ps2_TE3F_40wk_Mock_DA.ds2_padj$log2FoldChange < -1 | ps2_TE3F_40wk_Mock_DA.ds2_padj$log2FoldChange >1)
+summary(ps2_TE3F_40wk_Mock_DA.ds2_padj)
+ps2_TE3F_40wk_Mock_DA.ds2_padj_sex <- ps2_TE3F_40wk_Mock_DA.ds2_padj %>% mutate(Group = ifelse(log2FoldChange > 0, "Male", "Female"))
+ps2_TE3F_40wk_Mock_DA.ds2_padj_sex <- ps2_TE3F_40wk_Mock_DA.ds2_padj_sex  %>% mutate(ps2_TE3F_40wk_Mock_DA.ds2_padj_sex , Markers = paste(Family, Genus, Species, sep = ";" ))
+
+ps2_Male_40wk_Mock_DA_volcano <- ggplot(data= ps2_TE3F_40wk_Mock_DA.ds2_padj_sex, aes(x=log2FoldChange, y= Markers, color = Group, label = Species)) +
+  geom_point(size = 5) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  geom_vline(xintercept = 0, col="black")+
+  xlim(-25,25)+
+  ggtitle("Male vs Female TE3F_40wk") +
+  scale_color_manual(values = Sex_color)+
+  facet_wrap(~Phylum, ncol = 4)
+```
+
+################
+Linear discriminant analysis (LDA)
+```{r}
+library(ggtree)
+library(ggtreeExtra)
+library(ggplot2)
+library(MicrobiotaProcess)
+library(tidytree)
+library(ggstar)
+library(forcats)
+# subset samples by Strain,Age,Gender 
+MPSE_TE3F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male") %>% as.MPSE
+
+MPSE_TE4F_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TE4F") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male") %>% as.MPSE
+
+MPSE_TEKO_40wk_Male <- ps1_ABX %>% subset_samples(Strain == "TEKO") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Male") %>% as.MPSE
+
+MPSE_TE3F_40wk_Female <- ps1_ABX %>% subset_samples(Strain == "TE3F") %>% subset_samples(Age == "40wk") %>% subset_samples(Sex == "Female") %>% as.MPSE
+```
+
+```{r}
+MPSE_TE3F_40wk_Male
+
+MPSE_TE3F_40wk_Male %<>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) 
+
+pdt_TE3F_40wk <- MPSE_TE3F_40wk_Male %>% mp_extract_tree(tip.level="Genus") %>% dplyr::filter(!is.na(fdr) & isTip, keep.td=F)
+pdt_TE3F_40wk <- pdt_TE3F_40wk[,c(1,2,4, 7:12)]
+write.csv(pdt_TE3F_40wk, "./pdt_TE3F_40wk.csv")
+
+pdt_TE4F_40wk <- MPSE_TE4F_40wk_Male %>% mp_extract_tree(tip.level="Genus") %>% dplyr::filter(!is.na(fdr) & isTip, keep.td=F)
+pdt_TE4F_40wk <- pdt_TE4F_40wk[,c(1,2,4, 7:12)]
+write.csv(pdt_TE4F_40wk, "./pdt_TE4F_40wk.csv")
+
+pdt_TEKO_40wk <- MPSE_TEKO_40wk_Male %>% mp_extract_tree(tip.level="Genus") %>% dplyr::filter(!is.na(fdr) & isTip, keep.td=F)
+pdt_TEKO_40wk <- pdt_TEKO_40wk[,c(1,2,4, 7:12)]
+write.csv(pdt_TEKO_40wk, "./pdt_TEKO_40wk.csv")
+```
+
+```{r}
+MPSE_TE3F_40wk_Male %>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% mp_extract_taxatree() %>% dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) -> genus_TE3F_40wk_Male.tb
+
+########
+MPSE_TE4F_40wk_Male %>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% mp_extract_taxatree() %>% dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) -> genus_TE4F_40wk_Male.tb
+
+########
+MPSE_TEKO_40wk_Male %>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% mp_extract_taxatree() %>% dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) -> genus_TEKO_40wk_Male.tb
+
+p1 <- genus_TE3F_40wk_Male.tb  %>% tidyr::unnest(RareAbundanceBySample) %>% 
+  arrange(LDAmean) %>% dplyr::filter(!grepl("^g__un_", label)) %>% ggplot(aes(y=label, x =RelRareAbundanceBySample, fill=Treatment)) + scale_fill_manual(values=c( "Water"="#3C5488FF", "ABX" ="#00A087FF")) +  theme_bw() + geom_boxplot(orientation='y')
+p1
+
+p2 <- genus_TE3F_40wk_Male.tb %>% dplyr::filter(!grepl("^g__un_", label)) %>%  ggplot(aes(y=reorder(label,LDAmean), x=LDAmean, xmin=LDAlower, xmax=LDAupper)) + geom_bar(aes(x=LDAmean, y=reorder(label,LDAmean), fill=Sign_Treatment), stat='identity', width = 0.5) + scale_fill_manual(values=c( "Water"="#3C5488FF", "ABX" ="#00A087FF")) + geom_errorbar(width=.2) + theme_bw() 
+p2
+p3 <- p2 %>% aplot::insert_left(p1)
+p3
+```
+
+```{r}
+deT <- MPSE_TE3F_40wk_Male %>% mp_extract_tree(tip.level="Genus") %>% dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% dplyr::pull(label)
+
+MPSE_TE3F_40wk_Male$Treatment = factor(MPSE_TE3F_40wk_Male$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(MPSE_TE3F_40wk_Male$Treatment)
+
+MPSE_TE3F_40wk_Male %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% ggplot(aes(x=Treatment, y=RelAbundanceBySample, fill=Treatment)) +                                    geom_boxplot() + geom_jitter(width = 0.2) +
+                        facet_wrap(facets = vars(label), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("ABX", "Water"))) +
+                        scale_fill_manual(values=c( "#3C5488FF", "#00A087FF"), guide="none") +
+                        labs(x=NULL, y="relative abundance (%)")
+
+MPSE_TE3F_40wk_Male %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% ggplot(aes(x=Treatment, y=Abundance, fill=Treatment)) + 
+                        geom_boxplot() + geom_jitter(width = 0.2)+
+                        facet_wrap(facets = vars(label), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("ABX", "Water"))) +
+                        scale_fill_manual(values=c("#3C5488FF", "#00A087FF"), guide="none") +
+                        labs(x=NULL, y="Abundance")
+```
+
+TE3 Female mice 
+```{r}
+MPSE_TE3F_40wk_Female %>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% mp_extract_taxatree() %>% dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) -> genus_TE3F_40wk_Female.tb
+
+
+p1 <- genus_TE3F_40wk_Female.tb  %>% tidyr::unnest(RareAbundanceBySample) %>% dplyr::filter(!grepl("^g__un_", label)) %>% ggplot(aes(y=label, x =RelRareAbundanceBySample, fill=Treatment)) + scale_fill_manual(values=c( "Water"="#3C5488FF", "ABX" ="#00A087FF")) + geom_boxplot(orientation='y')
+
+
+p2 <- genus_TE3F_40wk_Female.tb %>% dplyr::filter(!grepl("^g__un_", label)) %>% ggplot(aes(y=reorder(label,LDAmean), x=LDAmean, xmin=LDAlower, xmax=LDAupper)) + geom_bar(aes(x=LDAmean, y=reorder(label,LDAmean), fill=Sign_Treatment), stat='identity', width = 0.5) + scale_fill_manual(values=c( "Water"="#3C5488FF", "ABX" ="#00A087FF"), guide="none") + geom_errorbar(width=.2) + theme_bw() 
+
+p3 <- p2 %>% aplot::insert_left(p1)
+p3
+```
+
+```{r}
+
+MPSE_TE3F_40wk_Female
+
+MPSE_TE3F_40wk_Female %<>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) 
+
+
+deT <- MPSE_TE3F_40wk_Female %>% mp_extract_tree(tip.level="Genus") %>% dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% dplyr::pull(label)
+
+MPSE_TE3F_40wk_Female$Treatment = factor(MPSE_TE3F_40wk_Female$Treatment,levels = c("Water", "ABX")) #reorder Treatment Sex label order
+levels(MPSE_TE3F_40wk_Female$Treatment)
+
+MPSE_TE3F_40wk_Female %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% ggplot(aes(x=Treatment, y=RelAbundanceBySample, fill=Treatment)) +                                    geom_boxplot() + geom_jitter(width = 0.2) +
+                        facet_wrap(facets = vars(label), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("ABX", "Water"))) +
+                        scale_fill_manual(values=c( "#3C5488FF", "#00A087FF"), guide="none") +
+                        labs(x=NULL, y="relative abundance (%)")
+
+MPSE_TE3F_40wk_Female %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% ggplot(aes(x=Treatment, y=Abundance, fill=Treatment)) + 
+                        geom_boxplot() + geom_jitter(width = 0.2)+
+                        facet_wrap(facets = vars(label), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("ABX", "Water"))) +
+                        scale_fill_manual(values=c("#3C5488FF", "#00A087FF"), guide="none") +
+                        labs(x=NULL, y="Abundance")
+```
+
+Correlation assay
+```{r}
+MPSE_TE3F_40wk_Male %>% mp_rrarefy() %>% mp_diff_analysis(.abundance= RareAbundance, .group=Treatment) %>% mp_extract_taxatree %>% dplyr::filter(nodeClass=='Genus' & !is.na(LDAmean), keep.td=F) %>% tidyr::unnest(RareAbundanceBySample) %>% select(label, Sample, RelRareAbundanceBySample) %>% tidyr::pivot_wider(id_cols=Sample, names_from=label, values_from=RelRareAbundanceBySample) -> genus.tbf_40wk
+
+library(ggplot2)
+library(ggstatsplot)
+#%>% filter(Treatment =="Water") 
+MPSE_TE3F_40wk_Male %>% left_join(genus.tbf_40wk) %>% mp_rrarefy() %>% mp_cal_alpha() %>% mp_extract_sample  %>% ggscatterstats(x=HippSize, y=g__Helicobacter, type='no', ggplot.component=aes(color=Treatment))
+
+###############
+MPSE_ps1_ABX_Male <- ps1_ABX %>% subset_samples(Strain == "TE3F" | Strain == "TE4F" | Strain == "TEKO")  %>% subset_samples(Sex == "Male") %>% as.MPSE
+
+#Abundance of biomarker genus found increased in  TE3F 40wk Male samples
+AbunTB_TE3F_40wk_WU <- MPSE_ps1_ABX_Male %>% filter(Age == "40wk")%>% filter(Strain == "TE3F")%>% 
+                      mp_rrarefy() %>% 
+                      mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                      mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T)  %>% 
+                      dplyr::filter(label %in% c("g__Odoribacter",
+                                                    "g__Streptococcus",
+                                                    "g__Clostridium_XlVb",
+                                                    "g__Butyricicoccus",
+                                                    "g__Ruminococcus",
+                                                    "g__Helicobacter",
+                                                    "g__Blautia",
+                                                    "g__Parasutterella"
+                                                 ))%>%
+                      tidyr::unnest(AbundanceBySample) %>% select(label, Sample, RelAbundanceBySample) %>% 
+                      tidyr::pivot_wider(id_cols=Sample, names_from=label, values_from=RelAbundanceBySample) 
+
+tb_TE3F_40wk_Male_WU <- MPSE_ps1_ABX_Male %>% filter(Age == "40wk")%>% filter(Strain == "TE3F")%>% 
+                                          left_join(AbunTB_TE3F_40wk_WU ) %>% 
+                                          mp_rrarefy() %>% mp_cal_alpha() %>% 
+                                          mp_extract_sample %>% 
+                                            select(Sample, Treatment, HippSize, p.Tau, Astrocyte_length, 
+                                                    Microglia_Branch, Microglia_Length, Microglia_Volume,
+                                                   Acetate, Propionate, Butyrate,
+                                                    g__Odoribacter,
+                                                    g__Streptococcus,
+                                                    g__Clostridium_XlVb,
+                                                    g__Butyricicoccus,
+                                                    g__Ruminococcus,
+                                                    g__Helicobacter,
+                                                   g__Blautia,
+                                                    g__Parasutterella,
+                                                    Observe, Pielou) %>% 
+                                         column_to_rownames(var = "Sample")
+
+```
+
+```{r, fig.height=2.5, fig.width=2.5}
+library("corrplot")
+tb_TE3F_40wk_Male_WU
+#%>% filter(Treatment =="Water")
+tb_TE3F_40wk_Male_HippoSize_WU <- tb_TE3F_40wk_Male_WU  %>% select(HippSize,
+                                                                    g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) 
+library("dplyr")
+library(ellipse)
+library(RColorBrewer)
+#library("Hmisc")
+# shapiro.test(tb_TE3F_40wk_Male_HippoSize$HippSize) #W = 0.95813, p-value = 0.1352
+# shapiro.test(tb_TE3F_40wk_Male_HippoSize$Observe)  # W = 0.98197, p-value = 0.7497
+# shapiro.test(tb_TE3F_40wk_Male_HippoSize$Pielou)   #W = 0.94425, p-value = 0.04407
+# shapiro.test(tb_TE3F_40wk_Male_HippoSize$g__Helicobacter)   # W = 0.90044, p-value = 0.001708
+
+tb_TE3F_40wk_Male_cor_HipS_WU <- cor(tb_TE3F_40wk_Male_HippoSize_WU, method = "spearman")
+tb_TE3F_40wk_Male_cor_WU_Hip <- tb_TE3F_40wk_Male_cor_HipS_WU["HippSize",] %>% as.matrix()
+     tb_TE3F_40wk_Male_cor_WU_Hip 
+corrl_WU_Hip <- cor.mtest(tb_TE3F_40wk_Male_HippoSize_WU)
+corrl_WU_Hip$p
+
+########
+tb_TE3F_40wk_Male_Tau_WU <- tb_TE3F_40wk_Male_WU  %>% select(p.Tau,
+                                                                g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) %>% dplyr::filter(!is.na(p.Tau)) #genus.tbf_40wk
+
+tb_TE3F_40wk_Male_Tau_cor_WU <- cor(tb_TE3F_40wk_Male_Tau_WU, method = "spearman")
+tb_TE3F_40wk_Male_cor_WU_Tau <- tb_TE3F_40wk_Male_Tau_cor_WU["p.Tau",] %>% as.matrix()
+     tb_TE3F_40wk_Male_cor_WU_Tau 
+corrl_WU_Tau <- cor.mtest(tb_TE3F_40wk_Male_Tau_WU)
+p_Tau <- corrl_WU_Tau$p  
+#p_Tau <- p_Tau["p.Tau",]
+
+tb_TE3F_40wk_Male_cor_WU <- cbind(tb_TE3F_40wk_Male_cor_WU_Hip,tb_TE3F_40wk_Male_cor_WU_Tau) 
+
+tb_TE3F_40wk_Male_cor_WU <- tb_TE3F_40wk_Male_cor_WU[-1,] 
+
+colnames(tb_TE3F_40wk_Male_cor_WU) <- c("Hippo_Size", "p-Tau")
+
+corrplot(tb_TE3F_40wk_Male_cor_WU, outline = TRUE, method = "ellipse", tl.col = "black")
+
+
+########
+tb_TE3F_40wk_Male_Astrocyte_WU <- tb_TE3F_40wk_Male_WU  %>% select(Astrocyte_length,
+                                                                g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) %>% dplyr::filter(!is.na(Astrocyte_length)) 
+
+tb_TE3F_40wk_Male_Astrocyte_cor_WU <- cor(tb_TE3F_40wk_Male_Astrocyte_WU, method = "spearman")
+
+corrl_WU_Astrocyte <- cor.mtest(tb_TE3F_40wk_Male_Astrocyte_WU)
+p_Astrocyte <- corrl_WU_Astrocyte$p
+
+########
+tb_TE3F_40wk_Male_Microglia_Branch_WU <- tb_TE3F_40wk_Male_WU  %>% select(Microglia_Branch,
+                                                                g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) %>% dplyr::filter(!is.na(Microglia_Branch)) 
+
+tb_TE3F_40wk_Male_Microglia_Branch_cor_WU <- cor(tb_TE3F_40wk_Male_Microglia_Branch_WU, method = "spearman")
+
+corrl_WU_Microglia_Branch <- cor.mtest(tb_TE3F_40wk_Male_Microglia_Branch_WU)
+p_Microglia_Branch <- corrl_WU_Microglia_Branch$p
+
+########
+tb_TE3F_40wk_Male_Microglia_Length_WU <- tb_TE3F_40wk_Male_WU  %>% select(Microglia_Length,
+                                                                g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) %>% dplyr::filter(!is.na(Microglia_Length)) 
+
+tb_TE3F_40wk_Male_Microglia_Length_cor_WU <- cor(tb_TE3F_40wk_Male_Microglia_Length_WU, method = "spearman")
+
+corrl_WU_Microglia_Length <- cor.mtest(tb_TE3F_40wk_Male_Microglia_Length_WU)
+p_Astrocyte <- corrl_WU_Microglia_Length$p
+
+########
+tb_TE3F_40wk_Male_Microglia_Volume_WU <- tb_TE3F_40wk_Male_WU  %>% select(Microglia_Volume,
+                                                                g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter
+                                                                ) %>% dplyr::filter(!is.na(Microglia_Volume)) 
+
+tb_TE3F_40wk_Male_Microglia_Volume_cor_WU <- cor(tb_TE3F_40wk_Male_Microglia_Volume_WU, method = "spearman")
+
+corrl_WU_Microglia_Volume <- cor.mtest(tb_TE3F_40wk_Male_Microglia_Volume_WU)
+p_Microglia_Volume <- corrl_WU_Microglia_Volume$p
+
+
+########
+tb_TE3F_40wk_Male_HPAM_WU <- tb_TE3F_40wk_Male_WU  %>% select(HippSize, p.Tau, Astrocyte_length,
+                                                              Microglia_Length, Acetate, Propionate, Butyrate,
+                                                                    g__Odoribacter,
+                                                                    g__Streptococcus,
+                                                                    g__Clostridium_XlVb,
+                                                                    g__Butyricicoccus,
+                                                                    g__Ruminococcus,
+                                                                    g__Helicobacter,
+                                                                    g__Blautia,
+                                                                    g__Parasutterella) %>% 
+                                                                    dplyr::filter(!is.na(p.Tau)) %>%
+                                                                    dplyr::filter(!is.na(Astrocyte_length)) %>% 
+                                                                    dplyr::filter(!is.na(Microglia_Length)) %>% 
+                                                                    dplyr::filter(!is.na(Acetate)) %>% 
+                                                                    dplyr::filter(!is.na(Propionate)) %>% 
+                                                                    dplyr::filter(!is.na(Butyrate))
+
+tb_TE3F_40wk_Male_HPAM_cor_WU <- cor(tb_TE3F_40wk_Male_HPAM_WU, method = "spearman")
+
+corrl_WU_HPAM_40wk <- cor.mtest(tb_TE3F_40wk_Male_HPAM_WU)
+p_HPAM_40wk <- corrl_WU_HPAM_40wk$p
+
+corrplot(tb_TE3F_40wk_Male_cor_HipS_WU, method = "ellipse",   type = 'upper',tl.col = "black", p.mat = corrl_WU_Hip$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_Tau_cor_WU, method = "ellipse", type = 'upper',tl.col = "black", p.mat = corrl_WU_Tau$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_Astrocyte_cor_WU, method = "ellipse", type = 'upper',tl.col = "black", p.mat = corrl_WU_Astrocyte$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_Microglia_Branch_cor_WU, method = "ellipse", type = 'upper',tl.col = "black", p.mat = corrl_WU_Microglia_Branch$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_Microglia_Length_cor_WU, method = "ellipse", type = 'upper',tl.col = "black", p.mat = corrl_WU_Microglia_Length$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_Microglia_Volume_cor_WU, method = "ellipse", type = 'upper',tl.col = "black", p.mat = corrl_WU_Microglia_Volume$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_16wk_Male_HPAM_cor_WU, method = "ellipse", diag = FALSE, type = 'lower',tl.col = "black", p.mat = corrl_WU_HPAM_16wk$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_32wk_Male_HPAM_cor_WU, method = "ellipse", diag = FALSE, type = 'lower',tl.col = "black", p.mat = corrl_WU_HPAM_32wk$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+
+corrplot(tb_TE3F_40wk_Male_HPAM_cor_WU, method = "ellipse", diag = FALSE, type = 'lower',tl.col = "black", p.mat = corrl_WU_HPAM_40wk$p, sig.level = c(0.001, 0.01, 0.05), pch.cex = 0.9, insig = 'label_sig', pch.col = 'grey20')
+```
+
+Germ-free mice study
+```{r}
+ps1_TE4F_GF <- ps1_GF %>% subset_samples(Treatment != "FMT") 
+#PS1_TE3F@sam_data$Treatment <- factor(ps1_TE3F@sam_data$Treatment,levels=c("Water", "ABX"))
+mpse_ps1_TE4F_GF <- ps1_TE4F_GF %>% as.MPSE
+mpse_ps1_TE4F_GF <- mpse_ps1_TE4F_GF %>% mp_filter_taxa(.abundance = Abundance, min.abun = 1, min.prop = 0.05)
+
+p.cc.Fhylum_TE4F_GF <- mpse_ps1_TE4F_GF %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Phylum, 
+                    topn = 10,
+                    relative = TRUE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Fhylum_TE4F_GF 
+
+p.cc.Fhylum_TE4F_GF.2 <- mpse_ps1_TE4F_GF %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Phylum, 
+                    topn = 10,
+                    relative = FALSE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Fhylum_TE4F_GF.2
+
+p.cc.Genus_TE4F_GF <- mpse_ps1_TE4F_GF  %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Genus, 
+                    topn = 10,
+                    relative = TRUE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Genus_TE4F_GF 
+
+p.cc.Genus_TE4F_GF.2 <- mpse_ps1_TE4F_GF  %>%
+                    mp_plot_abundance(
+                    .group=c(Treatment, Strain, Age, Sex),
+                    taxa.class = Genus, 
+                    topn = 10,
+                    relative = FALSE,
+                    plot.group=T)
+# visualize the abundance (rarefied) of top 20 phyla for each sample.
+p.cc.Genus_TE4F_GF.2
+```
+
+```{r}
+mpse_ps1_TE4F_GF
+
+Straincolor <-c("#00A087FF", "#3C5488FF")
+
+mpse_ps1_TE4F_GF %<>% mp_cal_alpha(.abundance = Abundance,force = TRUE)
+
+p_TE4F_40wk_Male <- mpse_ps1_TE4F_GF %>% filter(Sex == "Male")%>% 
+                                    mp_plot_alpha(.group = c(Treatment), .alpha = c(Observe, Pielou)) + 
+                                                scale_color_manual(values = Straincolor) +
+                                                scale_fill_manual(values = Straincolor) +
+                                                theme(legend.position = "none")
+p_TE4F_40wk_Male
+
+p_TE4F_40wk_Female <- mpse_ps1_TE4F_GF %>% filter(Sex == "Female")%>% 
+                                    mp_plot_alpha(.group = c(Treatment), .alpha = c(Observe, Pielou)) + 
+                                                scale_color_manual(values = Straincolor) +
+                                                scale_fill_manual(values = Straincolor) +
+                                                theme(legend.position = "none")
+p_TE4F_40wk_Female
+```
+
+beta analysis
+```{r}
+library(MicrobiotaProcess)
+library(patchwork)
+library(corrr)
+library(ggside)
+
+
+#Male
+mpse_ps1_TE4F_GF_Male <- mpse_ps1_TE4F_GF %>% filter(Sex == "Male")
+
+
+# hellinger transform
+mpse_ps1_TE4F_GF_Male %<>% mp_decostand(
+                                .abundance = Abundance,
+                                method = "hellinger"
+                                )
+
+#"wunifrac"
+mpse_ps1_TE4F_GF_Male %<>% mp_cal_dist(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+# PCoA analysis
+mpse_ps1_TE4F_GF_Male %<>% mp_cal_pcoa(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+
+pcoaplot1 <- mpse_ps1_TE4F_GF_Male %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .group = Treatment,
+                                        .starshape = Treatment,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot1
+
+#Female
+mpse_ps1_TE4F_GF_Female <- mpse_ps1_TE4F_GF %>% filter(Sex == "Female")
+
+
+# hellinger transform
+mpse_ps1_TE4F_GF_Female %<>% mp_decostand(
+                                .abundance = Abundance,
+                                method = "hellinger"
+                                )
+
+#"wunifrac"
+mpse_ps1_TE4F_GF_Female %<>% mp_cal_dist(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+# PCoA analysis
+mpse_ps1_TE4F_GF_Female %<>% mp_cal_pcoa(
+                            .abundance = hellinger,
+                            distmethod = "wunifrac"
+                            )
+
+pcoaplot2 <- mpse_ps1_TE4F_GF_Female %>% mp_plot_ord(
+                                        .ord = pcoa,
+                                        .group = Treatment,
+                                        .starshape = Treatment,
+                                        .color = Treatment,
+                                        #.size = Observe,
+                                        ellipse = TRUE,
+                                        show.legend = FALSE
+                                        ) +
+                            scale_color_manual(values = Straincolor) +
+                            scale_fill_manual(values = Straincolor) +
+                            scale_size_continuous(range = c(1, 3),
+                                        guide = guide_legend(override.aes = list(starshape = 15))
+                                        ) +
+                                        theme(
+                                        legend.key.width = unit(0.3, "cm"),
+                                        legend.key.height = unit(0.3, "cm"),
+                                        legend.text = element_text(size=6),
+                                        legend.title = element_text(size=7)
+                                        )
+pcoaplot2
+```
+
+Permutational Multivariate Analysis
+```{r}
+#TE4F_40wk_Male  Conv vs Ex-GF
+mpse_ps1_TE4F_GF_Male %<>% mp_adonis( .abundance = hellinger,
+                            distmethod = "wunifrac",
+                            .formula = ~Treatment,
+                            permutation = 9999,
+                            action = "add")
+mpse_ps1_TE4F_GF_Male %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+
+#TE4F_40wk_Female  Conv vs Ex-GF
+mpse_ps1_TE4F_GF_Female %<>% mp_adonis( .abundance = hellinger,
+                            distmethod = "wunifrac",
+                            .formula = ~Treatment,
+                            permutation = 9999,
+                            action = "add")
+mpse_ps1_TE4F_GF_Female %>% mp_extract_internal_attr(name=adonis) %>% mp_fortify()
+```
+
+Linear discriminant analysis (LDA) and Relative Abundance analysis (genus level) between Conv (TE4F) and ex-GF (TE4F).
+```{r}
+#TE4f_Male Conv (TE4F) and ex-GF (TE4F) group samples
+ps1_GF
+ps1_TE4F_GF <- ps1_GF %>% subset_samples(Treatment != "FMT") 
+
+mpse_ps1_TE4F_GF <- ps1_TE4F_GF %>% 
+                    as.MPSE %>% 
+                    mp_filter_taxa(.abundance = Abundance, min.abun = 1, min.prop = 0.05)
+
+#Male
+mpse_ps1_TE4F_GF_Male <- mpse_ps1_TE4F_GF %>% filter(Sex == "Male")
+
+mpse_ps1_TE4F_GF_Male %<>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) 
+
+genus_TE4F_GF_Male.tb <- mpse_ps1_TE4F_GF_Male %>% 
+                                mp_extract_taxatree() %>% 
+                                dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE)  
+p1 <- genus_TE4F_GF_Male.tb  %>% 
+      tidyr::unnest(RareAbundanceBySample) %>% 
+      arrange(LDAmean) %>% 
+      dplyr::filter(!grepl("^g__un_", label)) %>% 
+      ggplot(aes(y=label, x =RelRareAbundanceBySample, fill=Treatment)) + 
+      theme_bw() + 
+      geom_boxplot(orientation='y')+
+      labs(y=NULL, x="Relative abundance (%)")
+p1
+
+A <- genus_TE4F_GF_Male.tb %>% 
+    dplyr::filter(!grepl("^g__un_", label)) %>%  
+    ggplot(aes(y=reorder(label,LDAmean), x=LDAmean, xmin=LDAlower, xmax=LDAupper)) + 
+    geom_bar(aes(x=LDAmean, y=reorder(label,LDAmean), fill=Sign_Treatment), stat='identity', width = 0.5) + 
+    #scale_fill_manual(values=c("#00A087FF", "#3C5488FF"), guide="none") + 
+    geom_errorbar(width=.2) + 
+    labs(x="LDA score", y=NULL) +
+    theme_bw() +
+    theme(axis.text.y=element_blank())
+A
+
+p3 <- A %>% aplot::insert_left(p1)
+p3
+############
+deT_mpse_ps1_TE4F_GF_Male  <- mpse_ps1_TE4F_GF_Male  %>% 
+                                mp_extract_tree(tip.level="Genus") %>% 
+                                dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% 
+                                arrange(desc(LDAmean)) %>%
+                                dplyr::filter(!grepl("^g__un_", label)) %>%
+                                dplyr::pull(label)
+
+dt_mpse_ps1_TE4F_GF_Male <- mpse_ps1_TE4F_GF_Male %>% 
+                                mp_extract_tree(tip.level="Genus") %>% 
+                                dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% 
+                                arrange(desc(LDAmean)) %>%
+                                dplyr::filter(!grepl("^g__un_", label)) 
+dt_mpse_ps1_TE4F_GF_Male  <- dt_mpse_ps1_TE4F_GF_Male [, c(2,7:12)]
+write.csv(dt_mpse_ps1_TE4F_GF_Male , "./dt_mpse_ps1_TE4F_GF_Male .csv")
+
+
+B <- mpse_ps1_TE4F_GF_Male  %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT_mpse_ps1_TE4F_GF_Male) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% 
+                        ggplot(aes(x=Treatment, y=RelAbundanceBySample, fill=Treatment)) +                                       
+                        geom_boxplot() + 
+                        geom_jitter(width = 0.2) +
+                        facet_wrap(facets = vars(
+                                                factor(label , levels = deT_mpse_ps1_TE4F_GF_Male)
+                                                ), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("Conv", "Ex-GF"))) +
+                        #scale_fill_manual(values=c("#00A087FF", "#3C5488FF"), guide="none") +
+                        labs(x=NULL, y="Relative abundance (%)")
+B
+
+#Female
+mpse_ps1_TE4F_GF_Female <- mpse_ps1_TE4F_GF %>% filter(Sex == "Female")
+
+mpse_ps1_TE4F_GF_Female %<>% mp_rrarefy() %>% mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) 
+
+genus_TE4F_GF_Female.tb <- mpse_ps1_TE4F_GF_Female %>% 
+                                mp_extract_taxatree() %>% 
+                                dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE)  
+
+C<- genus_TE4F_GF_Female.tb %>% 
+    dplyr::filter(!grepl("^g__un_", label)) %>%  
+    ggplot(aes(y=reorder(label,LDAmean), x=LDAmean, xmin=LDAlower, xmax=LDAupper)) + 
+    geom_bar(aes(x=LDAmean, y=reorder(label,LDAmean), fill=Sign_Treatment), stat='identity', width = 0.5) + 
+    #scale_fill_manual(values=c("#00A087FF", "#3C5488FF"), guide="none") + 
+    geom_errorbar(width=.2) + theme_bw() 
+C
+
+p2 <- genus_TE4F_GF_Female.tb  %>% 
+      tidyr::unnest(RareAbundanceBySample) %>% 
+      arrange(LDAmean) %>% 
+      dplyr::filter(!grepl("^g__un_", label)) %>% 
+      ggplot(aes(y=label, x =RelRareAbundanceBySample, fill=Treatment)) + 
+      theme_bw() + 
+      geom_boxplot(orientation='y')+
+      labs(y=NULL, x="Relative abundance (%)")
+p2
+
+p4 <- C %>% aplot::insert_left(p2)
+p4
+
+##########33
+deT_mpse_ps1_TE4F_GF_Female  <- mpse_ps1_TE4F_GF_Female  %>% 
+                                mp_extract_tree(tip.level="Genus") %>% 
+                                dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% 
+                                arrange(desc(LDAmean)) %>%
+                                dplyr::filter(!grepl("^g__un_", label)) %>%
+                                dplyr::pull(label)
+
+dt_mpse_ps1_TE4F_GF_Female <- mpse_ps1_TE4F_GF_Female  %>% 
+                                mp_extract_tree(tip.level="Genus") %>% 
+                                dplyr::filter(!is.na(LDAmean) & isTip, keep.td=F) %>% 
+                                arrange(desc(LDAmean)) %>%
+                                dplyr::filter(!grepl("^g__un_", label)) 
+dt_mpse_ps1_TE4F_GF_Female  <- dt_mpse_ps1_TE4F_GF_Female [, c(2,7:12)]
+write.csv(dt_mpse_ps1_TE4F_GF_Female , "./dt_mpse_ps1_TE4F_GF_Female.csv")
+
+D <- mpse_ps1_TE4F_GF_Female  %>% mp_cal_abundance(.abundance=Abundance, force=T) %>% 
+                        mp_extract_abundance(taxa.class="Genus", topn="all", rmun=T) %>% 
+                        dplyr::filter(label %in% deT_mpse_ps1_TE4F_GF_Female) %>% 
+                        tidyr::unnest(AbundanceBySample) %>% 
+                        ggplot(aes(x=Treatment, y=RelAbundanceBySample, fill=Treatment)) +                                       
+                        geom_boxplot() + 
+                        geom_jitter(width = 0.2) +
+                        facet_wrap(facets = vars(label), nrow = 1, scales = "free", strip.position = "top") +
+                        ggsignif::geom_signif(comparisons=list(c("Conv", "Ex-GF"))) +
+                        #scale_fill_manual(values=c("#00A087FF", "#3C5488FF"), guide="none") +
+                        labs(x=NULL, y="Relative abundance (%)")
+D
+```
+
+Heatmap
+```{r}
+genus_TE3F_40wk_Male.tb <- MPSE_TE3F_40wk_Male %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TE3F")))
+write.csv(genus_TE3F_40wk_Male.tb, "./genus_TE3F_40wk_Male.tb.csv")
+
+genus_TE4F_40wk_Male.tb <- MPSE_TE4F_40wk_Male %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TE4F")))
+write.csv(genus_TE4F_40wk_Male.tb, "./genus_TE4F_40wk_Male.tb.csv")
+
+genus_TEKO_40wk_Male.tb <- MPSE_TEKO_40wk_Male %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TEKO")))
+write.csv(genus_TEKO_40wk_Male.tb, "./genus_TEKO_40wk_Male.tb.csv")
+```
+
+```{r}
+# Load data 
+data <- read.table("./genus_40wk_Male.tb.csv", header=T, sep=",")
+
+
+# Matrix format
+mat <- data
+rownames(mat) <- mat[,1]
+mat <- mat %>% dplyr::select(-label)
+mat <- as.matrix(mat)
+
+# Heatmap
+#d3heatmap(mat, scale="column", dendrogram = "none", width="800px", height="80Opx", colors = "Blues")
+
+library(heatmaply)
+p <- heatmaply(mat, 
+        dendrogram = "none",
+        xlab = "", ylab = "", 
+        main = "",
+        scale = "column",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = TRUE,
+        branches_lwd = 0.1,
+        label_names = c("Country", "Feature:", "Value"),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(mat),
+        labRow = rownames(mat),
+        heatmap_layers = theme(axis.line=element_blank())
+        )
+
+heatmaply(mat, file = "./heatmaply_plot.html",
+        dendrogram = "none",
+        xlab = " ", ylab = " ", 
+        main = "", 
+        seriate = "OLO",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        )
+browseURL("./heatmaply_plot.html")
+```
+
+```{r}
+genus_TE3F_40wk_Female.tb <- MPSE_TE3F_40wk_Female %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TE3F")))
+write.csv(genus_TE3F_40wk_Female.tb, "./genus_TE3F_40wk_Female.tb.csv")
+
+genus_TE4F_40wk_Female.tb <- MPSE_TE4F_40wk_Female %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TE4F")))
+write.csv(genus_TE4F_40wk_Female.tb, "./genus_TE4F_40wk_Female.tb.csv")
+
+genus_TEKO_40wk_Female.tb <- MPSE_TEKO_40wk_Female %>% 
+                           mp_rrarefy() %>% 
+                           mp_diff_analysis(.abundance=RareAbundance, .group=Treatment) %>% 
+                           mp_extract_taxatree() %>% 
+                           dplyr::filter(nodeClass=="Genus" & !is.na(Sign_Treatment), keep.td=FALSE) %>%
+                           arrange(LDAmean) %>% 
+                           dplyr::filter(!grepl("^g__un_", label)) %>% 
+                           dplyr::select(label, LDAmean, Sign_Treatment) %>% 
+                           mutate(Strain = factor(c("TEKO")))
+write.csv(genus_TEKO_40wk_Female.tb, "./genus_TEKO_40wk_Female.tb.csv")
+```
+
+```{r}
+# Load data 
+data <- read.table("./genus_40wk_Female.tb.csv", header=T, sep=",")
+
+
+# Matrix format
+mat <- data
+rownames(mat) <- mat[,1]
+mat <- mat %>% dplyr::select(-label)
+mat <- as.matrix(mat)
+
+# Heatmap
+#d3heatmap(mat, scale="column", dendrogram = "none", width="800px", height="80Opx", colors = "Blues")
+
+library(heatmaply)
+p <- heatmaply(mat, 
+        dendrogram = "none",
+        xlab = "", ylab = "", 
+        main = "",
+        scale = "column",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = TRUE,
+        branches_lwd = 0.1,
+        label_names = c("Country", "Feature:", "Value"),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(mat),
+        labRow = rownames(mat),
+        heatmap_layers = theme(axis.line=element_blank())
+        )
+
+heatmaply(mat, file = "./heatmaply_plot_female.html",
+        dendrogram = "none",
+        xlab = " ", ylab = " ", 
+        main = "", 
+        seriate = "OLO",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        )
+browseURL("./heatmaply_plot_female.html")
+```
